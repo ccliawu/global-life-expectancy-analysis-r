@@ -98,10 +98,10 @@ Contributions follow the final report's contribution statement.
 
 | Contributor | Project sections |
 | --- | --- |
-| Cecelia (Yufei) Wu | Data description, exploratory data analysis, and correlation analysis (Parts 2-4) |
-| Hongxuan Wang | Multiple linear regression (Part 5) |
-| Jing Wang | Model improvement and predictive comparisons (Part 6) |
-| Qingxuan Zheng | Unsupervised learning (Part 7) |
+| Cecelia (Yufei) Wu | Data description, exploratory data analysis, and correlation analysis |
+| Hongxuan Wang | Multiple linear regression |
+| Jing Wang | Model improvement and predictive comparisons |
+| Qingxuan Zheng | Correlation analysis and unsupervised learning |
 | All team members | Introduction and conclusion |
 
 ## Source materials
