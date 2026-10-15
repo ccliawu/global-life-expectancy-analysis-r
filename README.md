@@ -107,3 +107,8 @@ Contributions follow the final report's contribution statement.
 ## Source materials
 
 Prepared from the team's `F_Wang_Wang_Wu_Zheng_Final_Project.qmd` and its matching final PDF. Numerical summaries above follow the report's displayed tables where its prose and model labels differ. The original report and dataset are not bundled in this upload.
+
+## References
+
+- Kumarajarshi. *Life Expectancy (WHO)* [Dataset]. Kaggle. https://www.kaggle.com/datasets/kumarajarshi/life-expectancy-who
+
