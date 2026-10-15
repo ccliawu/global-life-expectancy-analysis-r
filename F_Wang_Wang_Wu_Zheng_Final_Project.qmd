@@ -1,0 +1,993 @@
+---
+title: 'STA 141A Final Project'
+subtitle: 'Instructor: Akira Horiguchi'
+author: "Student name: Jing Wang, Hongxuan Wang, Qingxuan Zheng, Cecelia Wu"
+date: "2026-06-09 23:00:00 PDT"
+date-format: "MMM D, YYYY (dddd), HH:mm z"
+
+format: 
+  pdf: 
+    pdf-standard: 
+      ua-2
+    include-in-header:
+      text: |
+        \usepackage{fancyhdr}
+        \usepackage{lastpage}
+        \usepackage{setspace}
+        \singlespacing
+        \usepackage{titling}
+        \preauthor{\vspace{-3em}\begin{center}}
+        \setlength{\droptitle}{-3em}
+        \postauthor{\end{center}}
+
+        \pagestyle{fancy}
+        \fancyhf{}
+        \renewcommand{\headrulewidth}{0pt}
+        \fancyhead[RO,RE]{}
+        \fancyhead[LO,LE]{}
+        \fancyfoot[LE,LO]{}
+        \fancyfoot[LE,CO]{Page \thepage\ of \pageref{LastPage}}
+editor: source
+
+geometry:
+  - margin=1in
+
+fontsize: 12pt
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(MASS)
+library(broom)
+library(car)
+library(ggrepel)
+library(patchwork)
+library(FNN)
+library(caret)
+library(kableExtra)
+library(dplyr)
+```
+
+```{r, include=FALSE}
+life_raw <- read.csv("Life_Expectancy_Data.csv",check.names = FALSE)
+sort(colSums(is.na(life_raw)), decreasing = TRUE)
+
+names(life_raw)<- c(
+  "Country","Year","LifeExpectancy","Status",
+  "AdultMortality","InfantDeaths","Alcohol",
+  "PercentageExpenditure","HepatitisB","Measles",
+  "BMI","UnderFiveDeaths","Polio",
+  "TotalExpenditure","Diphtheria","HIV_AIDS",
+  "GDP","Population","Thinness_1_19",
+  "Thinness_5_9","IncomeComposition",
+  "Schooling"
+)
+
+life <- life_raw |>
+  drop_na()
+```
+**Part 1: Executive Summary and Introduction**
+
+Life expectancy is a key indicator widely used to assess population health and overall social development. Differences in life expectancy across countries are generally influenced by a variety of factors, including economic conditions, education, disease, and public health resources. 
+Through this project, we aim to identify the factors most closely associated with life expectancy and provide useful analysis and recommendations for improving health outcomes and reducing global health inequalities.
+
+In this project, we analyze the WHO life Expectancy Dataset to investigate the relationship between life expectancy and other social factors. We apply multiple statistical learning methods, including multiple regression, KNN, PCA and K-mean clustering, were used to identify important predictors. They are also used to improve predictive performance and explore hidden country patterns related to public health and socioeconomic development.
+
+**Part 2: Data description**
+
+The datase records national-level health, demographic, and economic indicators for 193 countries from 2000 to 2015, with each observation corresponding to one country in one year. The dataset is publicly available and contains only aggregated national-level statistics with no individual-level information, raising no ethical and privacy concerns.
+
+The raw dataset contains 2938 country-year observations with 22 variables. After data cleaning, 1649 observations remained. In this project, we will focus on nine variables: one response variable and eight predictors:
+**Response Variable**: Life Expectancy: average life expectancy at birth in a given country-year.
+**Socioeconomic Predictors: Schooling**: average years of formal education completed by adults. 
+**IncomeComposition**: Human Development Index-based measure of income distribution and resource composition.
+**GDP**: per-capita GDP(USD).
+**Status**: a binary indicator of national development status (0=Developing, 1=Developed).
+**Health and Disease Burden Predictors:**
+**AdultMortality**: probability of dying between ages 15 and 60 per 1000 adults.
+**HIV_AIDS**: deaths per 1000 live births due to HIV or AIDS in children 0--4 years old.
+**BMI**: average national Body Mass Index of the adult population.
+**Alcohol**: per-capita alcohol consumption (litres of pure alcohol per year).
+
+**Part3: Exploratory Data Analysis (EDA)**
+```{r}
+life <- life |>
+  mutate(Status = factor(Status, levels = c(0, 1),
+                          labels = c("Developing", "Developed")))
+```
+
+```{r,fig.width=6, fig.height=3} 
+#Distribution Plot
+life |>
+  ggplot(aes(x = LifeExpectancy)) +
+  geom_histogram(binwidth = 2)
+```
+The distribution of life expectancy is unimodal and centered around 70. Most observations fall between 65 and 80 years. The distribution has a slight left skewness, with a small number of observations having lower life expectancy.
+```{r,fig.width=8, fig.height=5}
+#EDA Scatter plot
+y <-"LifeExpectancy"
+xs<-c("AdultMortality",
+    "BMI",
+    "HepatitisB",
+    "Polio",
+    "Diphtheria",
+    "HIV_AIDS",
+    "GDP",
+    "IncomeComposition",
+    "Schooling")
+
+dat<-life[, c(y, xs)]
+dat<-dat[complete.cases(dat), ]
+
+
+par(mfrow = c(3,3))
+for (x in xs) {
+  plot(dat[[x]], dat[[y]],
+       xlab = x,
+       ylab = y,
+       main = paste(y, "vs", x),
+       pch = 20, col = "steelblue")
+}
+```
+The scatterplots reveal several clear relationships between life expectancy and the selected health and socioeconomic indicators.
+  **Adult Mortality** shows a strong negative association with life expectancy. Countries with higher adult mortality generally have lower life expectancy.
+  **Schooling** exhibits a strong positive relationship with life expectancy. Countries with higher average years of schooling tend to have longer life expectancy.
+  **Income Composition** of Resources is strongly positively associated with life expectancy, suggesting that socioeconomic development is closely related to population health outcomes.
+  **HIV/AIDS** displays a clear negative relationship with life expectancy. As HIV/AIDS increases, life expectancy tends to decrease.
+  **GDP** appears to be positively associated with life expectancy, although this relationship is nonlinear. At lower income levels, as GDP increases, life expectancy increases significantly.
+ **Vaccination-related variables** (Hepatitis B, Polio, and Diphtheria immunization rates) generally show positive associations with life expectancy. Countries with higher vaccination rates tend to have higher life expectancy. However, for Hepatitis B, there is no clear pattern or the relationships appear weaker, which needs further analysis.
+  **BMI** shows a positive but less consistent relationship with life expectancy.
+  
+**Part 4: Correlation Analysis**
+```{r}
+all_vars <- c(y, xs) #combine all LifeExpectancy and xs
+
+#Calculate the correlation
+cor_table <- tibble(
+  var_name = all_vars,
+  cor_with_LE = cor(life[, all_vars])[, y]
+) |>
+  filter(var_name != y) |>
+  arrange(desc(abs(cor_with_LE))) |>
+  mutate(cor_with_LE = round(cor_with_LE, 3))
+
+kable(cor_table,
+      caption = "Correlation between Life Expectancy and each predictor",
+      col.names = c("Variable", "Correlation"))
+```
+From the table, Schooling(r=0.73) and IncomeComposition(R=0.72) are the two strongest correlates of life expectancy. This can indicate that educated populations are better able to use medical resources or adopt a healthy diet and exercise. However, AdultMortality (r=-0.70) and HIV/AIDS prevalence(r=-0.59) show strong negative associations with life expectancy. BMI shows a positive correlation with life expectancy (r=0.54), which is opposite to what we expect at the individual level. Immunization coverage variables (Polio, Diphtheria, HepatitisB) show weaker correlations (r=0.20-0.34). This might be because most countries already maintain high coverage rates, which would limit the discriminative power. Thus, in this project, we would focus on Schooling, IncomeComposition, AdultMortality, HIV/Aids, GDP, and BMI as the principal predictors in the following regression analyses.
+
+**Part 5: Multiple linear regression**
+
+Based on exploratory data analysis (EDA) and correlation analysis, we found multiple variables are associated with Life Expectancy. Schooling and IncomeComposition showed a strong positive correlation with Life Expectancy, while AdultMortality and HIV/AIDS showed a strong negative correlation; GDP and BMI also show a certain degree of positive correlation.
+
+However, EDA can only reflect the individual relationship between each variable and Life Expectancy. It cannot distinguish the independent effects of each variable when multiple predictors are considered simultaneously, nor control for possible correlations between variables. Therefore, to further evaluate the independent contributions of each predictor variable after controlling for other factors and to establish a more explanatory model, we proceed with Multiple Linear Regression analysis. 
+```{r}
+model_data <- life |>
+  dplyr::select(LifeExpectancy, AdultMortality, BMI, HepatitisB, 
+                Polio, Diphtheria, HIV_AIDS, GDP, IncomeComposition, 
+                Schooling, Status) |>
+  mutate(Status = factor(Status)
+         )
+```
+
+```{r include=FALSE}
+colSums(is.na(model_data))
+dim(model_data)
+summary(model_data)
+```
+
+**Model 1: Socioeconomic Model**
+
+First, we established the most basic model (Model 1), which includes only three socioeconomic variables—GDP, Income Composition, and Schooling.
+```{r include=FALSE}
+m1 <- lm(LifeExpectancy ~ GDP + IncomeComposition 
+         + Schooling, data = model_data)
+
+summary(m1)
+```
+
+```{r}
+glance(m1) |>
+  dplyr::select(r.squared, adj.r.squared,
+                statistic, p.value, AIC, BIC, sigma) |>
+  mutate(p.value = format(p.value, scientific = TRUE)) |>
+  kable(caption = "Model 1 Fit Statistics")
+```
+Based on the Table 2, the results shows that the model is overall significant (F-statistic = 803.7, p-value < 2.2e-16) and an Adjusted $R^2$ of 0.594, which indicate that relying on socioeconomic conditions can already explain about 59.4% of the differences in life expectancy between countries. This result indicates that the gap in life expectancy between countries is jointly influenced by development levels, educational accumulation, and resources.
+
+```{r}
+table_M1 <- tidy(m1, conf.int = TRUE) |>
+  mutate(p.value = format(p.value, scientific = TRUE)
+         )
+
+kable(table_M1, caption = "Model 1 Socioeconomic Model")
+```
+
+Based on Table 3, Income Composition has the highest estimation coefficient ($\beta$ = 17.86), reflecting its contribution to Life Expectancy far exceeding GDP which means if the economy grows, income cannot be effectively converted into medical resources, improved quality of life, and public welfare, so the increase in lifespan may still be limited. Schooling also showed a stable positive effect ($\beta$ = 1.237). This suggests that higher education levels are associated with improved living conditions and longer life expectancy.
+
+Model 2: Full Additive Model
+
+Although the most basic model has demonstrated strong explanatory power, 40% of variants remain unexplained. To identify these remaining variables, to constructed the Full Additive Model (Model 2), adding health-related indicators such as Adult Mortality, BMI, HIV/AIDS, Polio, and Diphtheria to the original model.
+```{r include=FALSE}
+m2 <- lm(LifeExpectancy ~ GDP + IncomeComposition + Schooling + 
+           AdultMortality + BMI + HIV_AIDS 
+         + Polio + Diphtheria, data = model_data)
+
+summary(m2)
+```
+
+```{r}
+glance(m2) |> dplyr::select(
+  r.squared, adj.r.squared, statistic, p.value, sigma) |> 
+  rename(
+    R2 = r.squared, Adjusted_R2 = adj.r.squared, 
+    F_statistic = statistic, 
+    Model_p_value = p.value, Residual_SE = sigma) |>
+  mutate(Model_p_value = format(Model_p_value, 
+                                scientific = TRUE), 
+         across(where(is.numeric), round, 3)) |>
+  kable(caption = "Model 2: Fit Statistics")
+```
+
+```{r}
+compare12 <- tibble(Model = c("M1", "M2"),
+                    Adj_R2 = c(summary(m1)$adj.r.squared, 
+                               summary(m2)$adj.r.squared),
+                    AIC = c(AIC(m1), AIC(m2)),
+                    BIC = c(BIC(m1), BIC(m2))
+)
+kable(compare12, caption = "Comparison of Model 1 and Model 2")
+```
+The degree of change in the data shows a clear improvement in the overall model by Table 5, Adjusted R^2 increased from 0.594 to 0.822, AIC dropped from 10371 to 9016, BIC decreased from 10399 to 9070, and Residual Standard Error decreased from 5.61 to 3.71 on Table 4. These data indicate that differences in life expectancy between countries cannot be explained solely by economics and education; disease burden and public health conditions play a critical role.
+
+```{r}
+table_m2 <- tidy(m2, conf.int = TRUE) |>
+  filter(term %in% c(
+    "AdultMortality",
+    "HIV_AIDS",
+    "Polio",
+    "Diphtheria"
+  )) |>
+  mutate(
+    across(c(estimate, std.error, 
+             statistic, conf.low, conf.high), round, 4),
+    p.value = format(p.value, scientific = TRUE)
+  )
+
+kable(
+  table_m2,
+  caption = "Selected Health-Related Predictors in Model 2"
+)
+
+```
+Among the newly added variables on Table 6, Adult Mortality showed the most stable and significant negative relationship ($\beta$ = −0.0183, p-value < 0.001). This is mportant because even after controlling for economic development level, education level, and other health indicators, adult mortality can still independently predict changes in life expectancy, indicating that the overall national health environment has a important impact on population life expectancy.
+
+HIV/AIDS also showed significant negative effects ($\beta$ = −0.441, p-value < 0.001), this variable mainly reflects children's health risks and basic health conditions. Even after controlling for economic and educational factors, its impact remains significant, indicating that health issues in childhood not only affect short-term mortality but also have long-term impacts on the overall national life expectancy.
+
+Variables of vaccine coverage showed different characteristics. Polio was no longer significant after adding other variables (p-value = 0.082), indicating that its explanatory power may have been absorbed by GDP, Schooling, and Income Composition. In contrast, Diphtheria still maintained a significant positive effect ($\beta$ = 0.018, p-value = 0.001), suggesting it may represent not only a single vaccination rate but more of the overall operational capacity of the national public health system.
+
+
+**Multicollinearity Check**
+
+```{r}
+vif_M2 <- vif(m2)
+vif_table <- data.frame(VIF = vif_M2)
+
+kable(vif_table, caption = "Variance Inflation Factors for Model 2")
+```
+
+The results may suggest that model stability could be examined through the Variance Inflation Factor on Table 6. Moreover, the significant findings indicate that all VIF appeared to fall below 5, with the highest VIF value reaching only approximately 3.09. Furthermore, the evidence could demonstrate that no severe multicollinearity exists within the model. Given that these results support the stability of each variable's estimation,and the key findings might indicate that different explanatory variables provide relatively independent information.
+
+**The Diagnostic plot**
+```{r,fig.width=7, fig.height=4}
+fit <- m2
+
+diag_df <- augment(fit) |>
+  mutate(
+    row_id = row_number()
+  )
+
+p_res_fit <- ggplot(diag_df,aes(x=.fitted,y=.resid))+
+  geom_hline(yintercept=0,linewidth=0.6,color="gray40")+
+  geom_point(alpha=0.75,size=2)+
+  geom_smooth(method = "loess", se = TRUE, color = "#2C7FB8", linewidth = 1)+
+  labs(
+    title="Residuals vs Fitted",
+    x="Fitted values",
+    y="Residuals"
+  )+
+  theme_minimal()
+
+p_scale <- ggplot(diag_df,aes(x=.fitted,y=sqrt(abs(.std.resid))))+
+  geom_point(alpha=0.75,size=2)+
+  geom_smooth(method = "loess", se = TRUE, color = "#1B9E77", linewidth = 1) +
+  labs(
+    title="Scale–Location Plot",
+    x="Fitted values",
+    y=expression(sqrt("|Standardized residual|"))
+  )+
+  theme_minimal()
+
+qq_df <- diag_df |>
+  arrange(.std.resid) |>
+  mutate(theo_q=qnorm(ppoints(n())))
+
+p_qq <- ggplot(qq_df,aes(x=theo_q,y=.std.resid))+
+  geom_point(alpha=0.8,size=2)+
+  geom_abline(slope=1,intercept=0,color="gray40",linewidth=0.8)+
+  labs(
+    title="Normal Q-Q Plot",
+    x="Theoretical quantiles",
+    y="Standardized residuals"
+  )+
+  theme_minimal()
+
+
+n <- nrow(model.frame(fit))
+p <- length(coef(fit))-1
+
+lev_cut <- 2*(p+1)/n
+cook_cut <- 4/n
+out_cut <- 2
+
+p_infl <- ggplot(diag_df,aes(x=.hat,y=.std.resid))+
+  geom_hline(yintercept=c(-out_cut,0,out_cut),
+             linetype=c(2,1,2),
+             color=c("firebrick","gray40","firebrick"))+
+  geom_vline(xintercept=lev_cut,linetype=2,color="purple")+
+  geom_point(aes(size=.cooksd),alpha=0.7)+
+  ggrepel::geom_text_repel(
+    data=diag_df |>
+      filter(.cooksd>cook_cut | .hat>lev_cut | abs(.std.resid)>out_cut),
+    aes(label=row_id),
+    size=3,
+    max.overlaps=30
+  )+
+  scale_size_continuous(range=c(2,9))+
+  labs(
+    title="Influence / Leverage Plot",
+    x="Leverage (hat values)",
+    y="Standardized residuals",
+    size="Cook's D"
+  )+
+  theme_minimal()
+
+(p_res_fit | p_scale) / (p_qq | p_infl)
+```
+A slight curve still can be observed in the Residuals vs Fitted plot, suggesting that the model may not fully capture the potential nonlinear relationship; The scale–location plot shows some diffusion in the highly fitted region, suggesting slight heteroscedasticity; The Q–Q plot deviates at the tail, indicating that the residuals do not strictly follow a normal distribution; The Residual vs Leverage graph contains a few high leverage points, but the Cook's Distance is generally low, so there are no obvious dominant model results for anomalies. Overall, although the model does not fully satisfy all ideal assumptions, there are no serious violations, and the results still represent strong interpretive power and reliability.
+
+**Part 6: Model Improvement**
+```{r include=FALSE}
+M3 <- lm(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria + HepatitisB + 
+    HIV_AIDS + GDP +
+    IncomeComposition + Schooling,
+  data = model_data
+)
+
+summary(M3)
+stepAIC(M3)
+
+```
+
+```{r}
+M3_stats <- glance(M3) |>
+  dplyr::select(
+    p.value,
+    r.squared,
+    adj.r.squared,
+    AIC,
+    sigma
+  ) |>
+  mutate(p.value = format(p.value, scientific = TRUE))
+kable(M3_stats, caption = "Model 3 Fit Statistics")
+
+HepatitisB_p <- summary(M3)$coefficients["HepatitisB", "Pr(>|t|)"]
+cat("HepatitisB p-value is :", HepatitisB_p, "\n")
+cat("So we get the linear regression model M4: \n")
+step_model <- stepAIC(M3, trace = FALSE)
+formula(step_model)
+```
+Based on the step-wise AIC selection results, the variable HepatitisB was removed form the model. Because excluded the AIC value from 4.335.55 to 4334.38. A lower AIC indicates a better balance between model fit and model complexity. Also, from summering of the model, we can find that p-value of HepatitisB is larger than 0.05, which means HepatitisB has no significant influence on the model. These suggests that HepatitisB does not provide sufficient additional explanatory power and can therefore be excluded from the final model.
+```{r include=FALSE}
+M4 <- lm(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria + HIV_AIDS + GDP +
+    IncomeComposition + Schooling,
+  data = model_data
+)
+
+summary(M4)
+```
+
+```{r}
+glance(M4) |>
+  dplyr::select(
+    r.squared,
+    adj.r.squared,
+    statistic,
+    p.value,
+    sigma
+  ) |>
+  rename(
+    R2 = r.squared,
+    Adjusted_R2 = adj.r.squared,
+    F_statistic = statistic,
+    Model_p_value = p.value,
+    Residual_SE = sigma
+  ) |>
+  mutate(
+    Model_p_value = format(Model_p_value, scientific = TRUE),
+    across(where(is.numeric), round, 3)
+  ) |>
+  kable(caption = "Model 4: Fit Statistics")
+
+```
+The overall model was highly significant, with an F-statistics of 952 and a very small p-value, indicating that the predictor collectively explain the proportion of the variation in life expectancy. The model achieved an adjusted R-squared of 0.822. It suggests that approximately 82.2% of the variability in life expectancy can be explained by the variables included in the model.
+```{r include=FALSE}
+M51 <- lm(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria +
+    HIV_AIDS + GDP +
+    IncomeComposition + Schooling +
+    AdultMortality * HIV_AIDS +
+    GDP * Schooling + 
+    IncomeComposition * Schooling + 
+    Polio * Diphtheria + 
+    BMI * GDP + 
+    Schooling * HIV_AIDS,
+  data = model_data
+)
+
+stepAIC(M51)
+```
+
+```{r}
+drop1_table <- drop1(M51, test = "F") |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Removed_Term")
+
+kable(drop1_table,
+      caption = "Model Selection for Interaction Terms")
+
+cat("So we get the final model M5:\n")
+step_result <- stepAIC(M51, trace = FALSE)
+formula(step_result)
+```
+Comments: We included several interaction term in the regression model because the effects of these variables are unlikely to operate independently in real-world situations.
+```{r,fig.width=6, fig.height=4}
+model_data$SchoolGroup <- cut(
+  model_data$Schooling,
+  breaks = 3,
+  labels = c("Low Schooling",
+             "Medium Schooling",
+             "High Schooling")
+)
+
+ggplot(
+  model_data,
+  aes(
+    x = HIV_AIDS,
+    y = LifeExpectancy,
+    color = SchoolGroup
+  )
+) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Interaction between HIV/AIDS and Schooling",
+    x = "HIV/AIDS",
+    y = "Life Expectancy",
+    color = "Schooling Level"
+  )
+```
+Comments:The interaction plot between HIV_AIDS and Schooling suggest that the relationship between HIV_AIDS and life expectancy differs across schooling level. The interaction term HIV_AIDS:Schooling was retained in the model because removing it slightly increase the AIC value, indicating a small reduction in model quality. Although the interaction was not statistically significant at the 0.05 level, it remained close to significance and had meaningful practical interpretation.
+```{r include=FALSE}
+M5 <- lm(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria + HIV_AIDS + GDP +
+    IncomeComposition + Schooling +
+    AdultMortality * HIV_AIDS + GDP * Schooling + 
+    Schooling * HIV_AIDS,
+  data = model_data
+)
+
+summary(M5)
+anova(M4, M5)
+```
+
+```{r}
+glance(M5) |>
+  dplyr::select(
+    r.squared,
+    adj.r.squared,
+    statistic,
+    p.value,
+    sigma
+  ) |>
+  rename(
+    R2 = r.squared,
+    Adjusted_R2 = adj.r.squared,
+    F_statistic = statistic,
+    Model_p_value = p.value,
+    Residual_SE = sigma
+  ) |>
+  mutate(
+    Model_p_value = format(Model_p_value, scientific = TRUE),
+    across(where(is.numeric), round, 3)
+  ) |>
+  kable(caption = "Model 5: Fit Statistics")
+```
+
+```{r}
+compare45 <- tibble(Model = c("M4", "M5"),
+                    Adj_R2 = c(summary(M4)$adj.r.squared, summary(M5)$adj.r.squared),
+                    AIC = c(AIC(M4), AIC(M5))
+)
+kable(compare45, caption = "Comparison of Model 4 and Model 5")
+```
+The interaction model (M6) showed strong overall performance and explained approximately 83.8% of the variability in life expectancy. Adding interaction terms enhanced the explanatory power of the model. It provides evidence that the relationships among health, education, and economic conditions are interconnected rather than independent.
+```{r include=FALSE}
+M6 <- lm(
+  LifeExpectancy ~ AdultMortality + 
+    BMI + Polio + I(Polio^2) + 
+    Diphtheria + log(GDP) + 
+    HIV_AIDS + I(HIV_AIDS^2) + 
+    IncomeComposition + I(IncomeComposition^2) +
+    Schooling + I(Schooling^2),
+  data = model_data
+)
+
+summary(M6)
+anova(M4, M6)
+```
+
+```{r}
+glance(M6) |>
+  dplyr::select(
+    r.squared,
+    adj.r.squared,
+    statistic,
+    p.value,
+    sigma
+  ) |>
+  rename(
+    R2 = r.squared,
+    Adjusted_R2 = adj.r.squared,
+    F_statistic = statistic,
+    Model_p_value = p.value,
+    Residual_SE = sigma
+  ) |>
+  mutate(
+    Model_p_value = format(Model_p_value, scientific = TRUE),
+    across(where(is.numeric), round, 3)
+  ) |>
+  kable(caption = "Model 6: Fit Statistics")
+```
+
+```{r}
+compare46 <- tibble(Model = c("M4", "M6"),
+                    Adj_R2 = c(summary(M4)$adj.r.squared, summary(M6)$adj.r.squared),
+                    AIC = c(AIC(M4), AIC(M6))
+)
+kable(compare46, caption = "Comparison of Model 4 and Model 6")
+```
+After applying a logarithmic transformation to the GDP variable and incorporation several quadratic terms into the regression model, the overall model performance improved significantly. While the original GDP variable tended to increase AIC and risk removal from the model, log(GDP) contributed to a lower AIC, suggesting the relationship between GDP and life expectancy is better represented on a logarithmic scale. Also, there is a nonlinear relationship in the model. Overall, the final model explaining approximately 86.6% of the variability in life expectancy.
+```{r include=FALSE}
+## KNN regression
+names(model_data) <- trimws(names(model_data))
+
+life_numeric <- model_data[, sapply(model_data, is.numeric)]
+str(life_numeric)
+
+life_scaled <- as.data.frame(scale(life_numeric))
+
+x <- as.matrix(life_scaled[, c(
+  "AdultMortality",
+  "BMI",
+  "HepatitisB",
+  "Polio",
+  "Diphtheria",
+  "HIV_AIDS",
+  "GDP",
+  "IncomeComposition",
+  "Schooling"
+)])
+
+y <- model_data$LifeExpectancy
+```
+All predictor variables were standardized using z-score so that variable measured on different scales would contribute equally to the distance calculations used in KNN regression.
+```{r}
+set.seed(2026 * 2)
+
+k_values <- c(1, 5, 10, 20, 50, 100, 200)
+
+knn_results <- data.frame(
+  K = k_values,
+  CV_MSE = NA
+)
+
+n <- nrow(model_data)
+folds <- sample(rep(1:10, length.out = n))
+
+for(i in 1:length(k_values)){
+  k <- k_values[i]
+  mse_fold <- c()
+
+  for(j in 1:10){
+  test_index <- which(folds == j)
+  
+    x_train <- x[-test_index, ]
+    x_test  <- x[test_index, ]
+
+    y_train <- y[-test_index]
+    y_test  <- y[test_index]
+
+    pred <- knn.reg(
+      train = x_train,
+      test = x_test,
+      y = y_train,
+      k = k
+    )$pred
+
+    mse_fold[j] <- mean((y_test - pred)^2)
+  }
+
+  knn_results$CV_MSE[i] <- mean(mse_fold)
+}
+
+knn_results
+
+```
+The KNN regression model was evaluated using 10-fold cross-validation across multiple value of K. The data set was randomly divided in to 10 subsets, where each subset was used once as a testing set. While the remaining observations were used for training. For each value of k, the MSE was calculated and averaged across all folds to assess prediction performance. This procedure helped identify the optimal number of neighbors while reducing the risk of over-fitting. It provides a more reliable estimate of model performance because it evaluate the model on multiple train-test sets rather than relying on a single partition of the data.
+```{r,fig.width=6, fig.height=3}
+## KNN bis-variance plot
+ggplot(knn_results,
+       aes(x = 1/K,
+           y = CV_MSE)) +
+  geom_line() +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(
+    title = "Bias-Variance Tradeoff for KNN",
+    x = "Model Flexibility (1/K)",
+    y = "10-fold CV-MSE"
+  )
+
+```
+THis plot illustrates how model flexibility changes as the value of k changes in KNN regression. Smaller values of k correspond to a more flexible model with lower bias but higher variance, vice versa. The 10-fold cross validation MSE was used to evaluate prediction performance across k.
+```{r}
+## 10-fold CV
+train_control <- trainControl(
+  method = "cv",
+  number = 10
+)
+
+```
+
+```{r include=FALSE}
+## CV for model M4
+M4_cv <- train(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria + HIV_AIDS + GDP +
+    IncomeComposition + Schooling,
+  
+  data = model_data,
+  method = "lm",
+  trControl = train_control
+)
+M4_cv
+```
+
+
+```{r include=FALSE}
+## cv for model M5
+M5_cv <- train(
+  LifeExpectancy ~ AdultMortality + BMI +
+    Polio + Diphtheria + HIV_AIDS + GDP +
+    IncomeComposition + Schooling +
+    AdultMortality * HIV_AIDS + GDP * Schooling + 
+    Schooling * HIV_AIDS,
+  
+  data = model_data,
+  method = "lm",
+  trControl = train_control
+)
+M5_cv
+```
+
+
+```{r include=FALSE}
+## cv for model M6
+M6_cv <- train(
+  LifeExpectancy ~ AdultMortality + 
+    BMI + Polio + I(Polio^2) + 
+    Diphtheria + log(GDP) + 
+    HIV_AIDS + I(HIV_AIDS^2) + 
+    IncomeComposition + I(IncomeComposition^2) +
+    Schooling + I(Schooling^2),
+  data = model_data,
+  method = "lm",
+  trControl = train_control
+)
+M6_cv
+```
+
+
+```{r include=FALSE}
+## LOOCV
+loocv_control <- trainControl(
+  method = "LOOCV"
+)
+
+M6_loocv <- train(
+  LifeExpectancy ~ AdultMortality + 
+    BMI + Polio + I(Polio^2) + 
+    Diphtheria + log(GDP) + 
+    HIV_AIDS + I(HIV_AIDS^2) + 
+    IncomeComposition + I(IncomeComposition^2) +
+    Schooling + I(Schooling^2),
+  data = model_data,
+  method = "lm",
+  trControl = loocv_control
+)
+
+M6_loocv
+```
+
+Although LOOCV provides an almost unbiased estimate of prediction error by repeatedly training the model on the entire data-set. It is computational more intensive and may produce higher variance estimated the 10-fold cross-validation. Therefore, 10-fold CV was used as the primary approach for model comparison, while LOOCV was only applied to the model M5 (It has the largest adjust R square，the smallest variance, and the smallest mean absolut error). It is a robustness check to confirm the stability of the prediction performance.
+```{r}
+## Model comparison
+comparison <- data.frame(
+
+  Model = c(
+    "M4 Baseline",
+    "M5 Interaction",
+    "M6 Polynomial",
+    "M6 Leave-one-out",
+    paste0("KNN K=", knn_results$K[which.min(knn_results$CV_MSE)])
+  ),
+
+  Train_MSE = c(
+    mean(resid(M4)^2),
+    mean(resid(M5)^2),
+    mean(resid(M6)^2),
+    NA,
+    NA
+  ),
+
+  CV_MSE = c(
+    M4_cv$results$RMSE^2,
+    M5_cv$results$RMSE^2,
+    M6_cv$results$RMSE^2,
+    NA,
+    min(knn_results$CV_MSE)
+  ),
+  
+  Rsquared_10cv = c(
+    M4_cv$results$Rsquared,
+    M5_cv$results$Rsquared,
+    M6_cv$results$Rsquared,
+    M6_loocv$results$Rsquared,
+    NA
+  ),
+  
+  MAE_10cv = c(
+    M4_cv$results$MAE,
+    M5_cv$results$MAE,
+    M6_cv$results$MAE,
+    M6_loocv$results$MAE,
+    NA
+  )
+)
+
+comparison
+```
+The model comparison table summarizes both training MSE and cross-validation MSE for the candidate models. Training MSD was not reported for the KNN model because KNN is a highly flexible nonparametric method that can achieve artifically low training error. The KNN model with K = 5 achieve the lowest cross-validation MSE, indicating the strongest predictive performance among all candidate model. This supports that the relationship between life expectancy and the predictors may involves substantial nonlinear structure. However,KNN provides limited interpretability compared with regression-based model. Therefore, the polynomial regression model may offer a better balance interpretability and predictive performance.
+```{r include=FALSE}
+## plot for best model
+ggplot(comparison,
+       aes(x = Model,
+           y = CV_MSE)) +
+  geom_col() +
+  theme_minimal() +
+  labs(
+    title = "Model Comparison using CV-MSE",
+    y = "10-fold CV-MSE"
+  )
+```
+
+**Part 7: Unsupervised Learning**
+Step 1: Principal Component Analysis (PCA)
+```{r,fig.width=6, fig.height=3}
+pca_data <- life[, c("AdultMortality", "BMI", "Polio", 
+                     "Diphtheria", "HIV_AIDS", "GDP", 
+                     "IncomeComposition", "Schooling")]
+
+pca_scaled <- scale(pca_data)
+pca_result <- prcomp(pca_scaled, center = TRUE, scale = TRUE)
+
+# Scree plot
+plot(pca_result, type = "l", main = "Scree Plot")
+
+# Create combined table: Variance explained + Loadings
+pca_summary <- summary(pca_result)
+
+variance_row <- data.frame(
+  Variable = "Variance Explained (%)",
+  PC1 = round(pca_summary$importance[2, 1] * 100, 2),
+  PC2 = round(pca_summary$importance[2, 2] * 100, 2),
+  PC3 = round(pca_summary$importance[2, 3] * 100, 2),
+  PC4 = round(pca_summary$importance[2, 4] * 100, 2)
+)
+
+cumulative_row <- data.frame(
+  Variable = "Cumulative (%)",
+  PC1 = round(pca_summary$importance[3, 1] * 100, 2),
+  PC2 = round(pca_summary$importance[3, 2] * 100, 2),
+  PC3 = round(pca_summary$importance[3, 3] * 100, 2),
+  PC4 = round(pca_summary$importance[3, 4] * 100, 2)
+)
+
+loadings_df <- as.data.frame(round(pca_result$rotation[, 1:4], 3))
+loadings_df <- cbind(Variable = rownames(loadings_df), loadings_df)
+rownames(loadings_df) <- NULL  # 关键：删除行名，避免重复
+
+combined_table <- rbind(variance_row, cumulative_row, loadings_df)
+
+kable(combined_table,
+      caption = "PCA Results: Variance Explained and Loadings 
+      (First 4 Principal Components)",
+      digits = 3,
+      align = "c")
+
+# PC1 vs PC2 scatter plot colored by Life Expectancy
+pca_scores <- as.data.frame(pca_result$x)
+pca_scores$LifeExpectancy <- life$LifeExpectancy
+
+ggplot(pca_scores, aes(x = PC1, y = PC2, color = LifeExpectancy)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_gradient(low = "red", high = "green") +
+  labs(title = "PCA: PC1 vs PC2", x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+Step 2: Elbow Method for Optimal K
+```{r, fig.width=6, fig.height=3}
+cluster_data <- pca_scores[, c("PC1", "PC2")]
+
+# Calculate WSS for K=1 to 10
+wss <- sapply(1:10, function(k) {
+  kmeans(cluster_data, centers = k, nstart = 25)$tot.withinss
+})
+
+# Plot elbow curve
+plot(1:10, wss, type = "b", pch = 19,
+     xlab = "Number of Clusters (K)", 
+     ylab = "Total Within-cluster Sum of Squares",
+     main = "Elbow Method for Optimal K")
+```
+The elbow plot shows that the total within-cluster sum of squares decreases sharply as K increases from 1 to 3, after which the rate of decline slows considerably. This indicates that adding more than three clusters provides diminishing returns in terms of reducing within-cluster variation. Therefore, K = 3 is selected as the optimal number of clusters for the subsequent K-means analysis.
+
+Step 3: K-means Clustering with K=3
+```{r,fig.width=6, fig.height=3}
+# Run K-means on PC1 and PC2 with K=3
+set.seed(123)
+kmeans_result <- kmeans(cluster_data, centers = 3, nstart = 100)
+
+# Add cluster assignment to data
+model_data$Cluster <- as.factor(kmeans_result$cluster)
+pca_scores$Cluster <- as.factor(kmeans_result$cluster)
+life$Cluster       <- as.factor(kmeans_result$cluster)
+
+# Visualize clusters on PC1-PC2 space
+ggplot(pca_scores, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  stat_ellipse(aes(fill = Cluster), alpha = 0.1, geom = "polygon") +
+  labs(title = "K-means Clustering (K=3) on PC1-PC2 Space",
+       x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+**Step 4: Calculate Cluster Characteristics**
+```{r}
+# Calculate mean of original variables for each cluster
+cluster_summary <- model_data %>%
+  group_by(Cluster) %>%
+  summarise(
+    Count = n(),
+    LifeExpectancy = mean(LifeExpectancy),
+    AdultMortality = mean(AdultMortality),
+    BMI = mean(BMI),
+    Polio = mean(Polio),
+    Diphtheria = mean(Diphtheria),
+    HIV_AIDS = mean(HIV_AIDS),
+    GDP = mean(GDP),
+    Schooling = mean(Schooling),
+    IncomeComposition = mean(IncomeComposition)
+  )
+
+# Calculate overall means for comparison
+overall_means <- model_data %>%
+  summarise(
+    LifeExpectancy = mean(LifeExpectancy),
+    AdultMortality = mean(AdultMortality),
+    BMI = mean(BMI),
+    Polio = mean(Polio),
+    Diphtheria = mean(Diphtheria),
+    HIV_AIDS = mean(HIV_AIDS),
+    GDP = mean(GDP),
+    Schooling = mean(Schooling),
+    IncomeComposition = mean(IncomeComposition)
+  )
+
+# Create formatted comparison table (Cluster vs Overall)
+comparison_table <- cluster_summary %>%
+  bind_rows(
+    overall_means %>% mutate(Cluster = "Overall", Count = nrow(model_data))
+  ) %>%
+  dplyr::select(Cluster, Count, LifeExpectancy, AdultMortality, BMI, 
+         Polio, Diphtheria, HIV_AIDS, GDP, Schooling, IncomeComposition)
+
+kable(comparison_table,
+      caption = "Cluster Means vs Overall Average",
+      digits = 2,
+      col.names = c("Cluster", "N", "Life Exp", "Adult Mort", "BMI", 
+                    "Polio", "Diphtheria", "HIV/AIDS", "GDP", 
+                    "Schooling", "Income Comp"),
+      align = c("c", "c", "c", "c", "c", "c", "c", "c", "c", "c", "c"))
+```
+### Cluster Characteristics
+Based on the K-means clustering results with K=3, the three clusters show distinct health and socioeconomic profiles:
+
+**Cluster 1: Medium Life Expectancy with Low Vaccination Coverage**
+This cluster contains 244 observations (15% of the data). Life expectancy is 64.0 years, below the overall average of 69.3 years. Adult mortality (197.6) is higher than the overall average (168.2). The most striking feature of this cluster is the extremely low vaccination coverage: Polio (44.3%) and Diphtheria (45.2%) are far below the overall averages (83.6% and 84.2%, respectively). HIV/AIDS rate (1.98) is at the overall average. GDP ($1,717) and schooling (9.9 years) are also low. **This cluster represents countries with weak public health infrastructure, particularly in vaccination programs, leading to lower life expectancy despite moderate HIV/AIDS levels.**
+
+**Cluster 2: Low Life Expectancy with High HIV/AIDS Burden**
+This cluster contains 460 observations (28% of the data). This group has the lowest life expectancy at 61.0 years. It has the highest adult mortality (266.2) and the highest HIV/AIDS rate (5.64), which is nearly three times the overall average (1.98). Economic indicators are the weakest, with the lowest GDP ($1,144), lowest schooling (9.9 years), and lowest income composition (0.47). Vaccination coverage is moderate (Polio 85.1%, Diphtheria 85.6%). **This cluster represents low-income countries heavily affected by the HIV/AIDS epidemic, primarily located in sub-Saharan Africa, where the disease burden is the primary driver of low life expectancy.**
+
+**Cluster 3: High Life Expectancy Group**
+This cluster contains 945 observations (57% of the data). This group has the highest life expectancy at 74.7 years, substantially above the overall average of 69.3 years. It exhibits the lowest adult mortality (112.9) and the lowest HIV/AIDS rate (0.21). Economically, it has the highest GDP ($8,712), highest schooling (13.8 years), and highest income composition (0.75). Vaccination coverage is excellent, with Polio (93.0%) and Diphtheria (93.5%) well above overall averages. **This cluster represents developed countries with strong socioeconomic conditions, well-established healthcare systems, high vaccination coverage, and low infectious disease burden.**
+
+**Summary**
+The three clusters clearly separate countries by their health and socioeconomic profiles. Life expectancy ranges from 61 years (Cluster 2) to 75 years (Cluster 3). The primary distinguishing factors between clusters are:
+```{r}
+summary_table <- data.frame(
+  Factor = c("Life Expectancy", 
+             "HIV/AIDS Burden", 
+             "Vaccination Coverage", 
+             "Economic Development"),
+  Cluster_1 = c("Medium (64 yrs)", 
+                "Moderate", 
+                "Very Low", 
+                "Low"),
+  Cluster_2 = c("Low (61 yrs)", 
+                "Very High", 
+                "Moderate", 
+                "Very Low"),
+  Cluster_3 = c("High (75 yrs)", 
+                "Very Low", 
+                "High", 
+                "High")
+)
+
+# Display formatted table
+kable(summary_table,
+      caption = "Cluster Characteristics Summary",
+      col.names = c("Factor", "Cluster 1", "Cluster 2", "Cluster 3"),
+      align = c("l", "c", "c", "c")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), 
+                full_width = FALSE,
+                font_size = 12)
+```
+The cluster analysis successfully identifies three distinct country profiles. The primary takeaway is that improving life expectancy requires a multi-pronged approach: economic development (Cluster 3), HIV/AIDS control (Cluster 2), and vaccination coverage (Cluster 1) are all important, but different countries face different primary challenges. For countries in Cluster 1, the most cost-effective intervention may be improving vaccination coverage. For Cluster 2, HIV/AIDS treatment and prevention should be the top priority.
+
+**Part 8: Conclusion**
+
+Our analysis indicates that the differences in life expectancy across countries are not only determined by a country's level of wealth, but also by the extent to which socioeconomic resources are translated into population health. The analysis showed that income composition, HIV/AIDS, Polio and Diphtheria are the most important factors associated with life expectancy. Among the candidate models, the KNN regression produced the lowest cross-validation error. PCA and K-means clustering further revealed clear differences in health and socio-economic conditions across countries. Overall, the results suggest that improving life expectancy requires both economic development and strong public health systems.
+
+Contribution Statement: All team members contributed to the Introduction and Conclution part. Cecelia Wu contributed to the Part2 to Part4, Hongxuan Wang contributed to the Part 5, Jing Wang contributed to Part 6, Qingxuan Zheng contributed to the Part 7.
+
