@@ -14,7 +14,9 @@ The project report describes a WHO life expectancy dataset covering **193 countr
 
 The response is life expectancy at birth. Predictors used across the analyses include adult mortality, BMI, immunization coverage, HIV/AIDS, GDP, income composition of resources, and schooling. Different models use different subsets of these variables.
 
-The source reads `Life_Expectancy_Data.csv` from the same directory as the Quarto document. **The dataset is not included in this upload.** Use the original project CSV: the code renames all 22 columns by position and expects development status encoded as 0/1. An arbitrary download with different column order or encoding is not interchangeable. The provided materials do not identify an exact download URL or redistribution license.
+The data was downloaded from Kaggle's [Life Expectancy (WHO)](https://www.kaggle.com/datasets/kumarajarshi/life-expectancy-who) dataset. The project CSV adapts the column names and order and encodes development status as 0 (Developing) and 1 (Developed); the underlying values and missing entries match the Kaggle data.
+
+The source reads `Life_Expectancy_Data.csv` from the same directory as the Quarto document. **The dataset is not included in this upload.** Use the prepared project CSV, or apply the same column ordering and status encoding to the Kaggle download before running the code: the script renames all 22 columns by position.
 
 ## Analysis workflow
 
